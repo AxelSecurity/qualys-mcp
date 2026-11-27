@@ -359,7 +359,18 @@ def _summarize(data: dict) -> str:
     stats: dict[str, Any] = {}
 
     cve_deep = data.get("cve_deep") or {}
-    if cve_deep:
+    if cve_deep and not cve_deep.get("qids"):
+        # No QID maps to this CVE: Qualys has nothing to detect, so severity,
+        # QDS, patch status and exposure are all unknown — not "0".
+        cve_id = cve_deep.get("cve", "") or data.get("_target", "")
+        parts.append(
+            f"{cve_id} not found in the Qualys Knowledge Base — no QIDs map to it. "
+            f"It may be too new, reserved/rejected, or not yet covered by Qualys; "
+            f"severity, patch status and exposure cannot be assessed"
+        )
+        stats["qidCount"] = 0
+        stats["inKnowledgeBase"] = False
+    elif cve_deep:
         cve_id = cve_deep.get("cve", "")
         title = cve_deep.get("title", "")
         qds = cve_deep.get("qds", 0)
@@ -380,6 +391,35 @@ def _summarize(data: dict) -> str:
         if asset_count:
             desc += f", {asset_count} potentially affected assets"
         parts.append(desc)
+
+        # Confirmed exposure from VMDR host detections (works without CSAM).
+        confirmed = cve_deep.get("confirmedHosts")
+        if isinstance(confirmed, dict):
+            host_count = confirmed.get("hostCount", 0)
+            hosts = confirmed.get("hosts") or []
+            lookup_ok = confirmed.get("lookupOk", False)
+            stats["confirmedAffectedHosts"] = host_count
+            stats["vmdrLookup"] = "ok" if lookup_ok else "failed/incomplete"
+            if host_count:
+                line = (f"{host_count} host(s) with open VMDR detections for {cve_id} "
+                        f"({confirmed.get('searchedBy', '')})")
+                if not lookup_ok:
+                    line += " — lookup partially failed, list may be incomplete"
+                parts.append(line)
+                shown = []
+                for h in hosts[:10]:
+                    name = h.get("hostname") or h.get("ip") or f"host {h.get('hostId', '')}"
+                    extra = [x for x in (h.get("ip") if h.get("hostname") else "", h.get("os", "")) if x]
+                    shown.append(f"{name} ({', '.join(extra)})" if extra else name)
+                more = f" (+{host_count - len(shown)} more)" if host_count > len(shown) else ""
+                parts.append("Affected hosts: " + "; ".join(shown) + more)
+            elif lookup_ok:
+                parts.append(f"No hosts with open VMDR detections for {cve_id} "
+                             f"({confirmed.get('searchedBy', '')})")
+            else:
+                parts.append(f"VMDR detection lookup for {cve_id} failed — affected hosts unknown")
+        if isinstance(summary_inner, dict) and summary_inner.get("csamAvailable") is False:
+            stats["csam"] = "not available (software-based exposure skipped)"
 
     qid_detail = data.get("qid_detail") or {}
     if isinstance(qid_detail, dict) and qid_detail.get("qids"):
@@ -542,10 +582,10 @@ def _correlate(data):
         cve_id = cve_deep.get("cve") or cve_meta.get("cve", "")
         qids_deep = set(cve_deep.get("qids") or [])
         qids_meta = set(cve_meta.get("qids") or []) if isinstance(cve_meta, dict) else set()
-        all_qids = list(qids_deep | qids_meta)
+        all_qids = sorted(qids_deep | qids_meta, key=lambda q: (not str(q).isdigit(), int(q) if str(q).isdigit() else 0, str(q)))
         if cve_id and all_qids:
             correlations.append({
-                "finding": f"{cve_id} maps to {len(all_qids)} QID(s): {all_qids[:5]}",
+                "finding": f"{cve_id} maps to {len(all_qids)} QID(s): {', '.join(map(str, all_qids))}",
                 "severity": "high",
                 "sources": ["cve_deep", "cve_meta"],
             })
@@ -573,7 +613,17 @@ def _build_actions(data, correlations):
     priority = 1
 
     cve_deep = data.get("cve_deep") or {}
-    if cve_deep:
+    if cve_deep and not cve_deep.get("qids"):
+        cve_id = cve_deep.get("cve", "CVE")
+        actions.append({
+            "priority": priority,
+            "action": (f"Verify {cve_id} in NVD / the vendor advisory and re-check later — "
+                       f"Qualys has no detection (QID) for it yet"),
+            "scope": cve_id,
+            "tool_hint": f"investigate(target='{cve_id}')",
+        })
+        priority += 1
+    elif cve_deep:
         cve_id = cve_deep.get("cve", "CVE")
         patch = cve_deep.get("patchAvailable", False)
         ransomware = cve_deep.get("ransomware", False)

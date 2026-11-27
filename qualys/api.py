@@ -821,7 +821,8 @@ def _parse_detections_xml(data):
         for host in root.findall('.//HOST'):
             hid = host.findtext('ID', '')
             ip = host.findtext('IP', '')
-            hostname = host.findtext('DNS', '')
+            hostname = host.findtext('DNS', '') or host.findtext('DNS_DATA/HOSTNAME', '') or ''
+            host_os = host.findtext('OS', '')
             try:
                 host_id_int = int(hid) if hid else 0
                 if host_id_int > max_host_id:
@@ -837,7 +838,7 @@ def _parse_detections_xml(data):
                     except ValueError:
                         pass
                 dets.append({
-                    'host_id': hid, 'ip': ip, 'hostname': hostname,
+                    'host_id': hid, 'ip': ip, 'hostname': hostname, 'os': host_os,
                     'qid': safe_int(d.findtext('QID', '0')),
                     'severity': safe_int(d.findtext('SEVERITY', '0')),
                     'status': d.findtext('STATUS', ''),
@@ -988,6 +989,103 @@ def get_host_detections(host_id, severity=4, days=30):
         return dets
 
     return _get_or_fetch(DETECTION_CACHE, DETECTION_CACHE_TIME, cache_key, _fetch, VMDR_CACHE_TTL, disk_ttl=DISK_TTL_VMDR)
+
+
+_HOSTS_FOR_QIDS_BATCH = 50
+
+
+def get_hosts_for_qids(qids, statuses="New,Active,Re-Opened", use_cache=True):
+    """Find hosts with VMDR detections for any of the given QIDs.
+
+    Queries the VMDR host detection API directly (filtered by QID), so it works
+    without CSAM. All QIDs are checked, in batches of 50, following id_min
+    pagination when the API truncates.
+
+    Returns a dict:
+        hosts           list of {hostId, ip, hostname, os, qids, maxSeverity, maxQds}
+                        sorted by maxQds then maxSeverity, descending
+        qidMaxQds       {qid: highest QDS seen across hosts} for detected QIDs
+        hostCount       number of distinct hosts
+        detectionCount  number of (host, QID) detections
+        qidsChecked     number of QIDs queried
+        failedBatches   number of batches where the API call failed
+        ok              True when every batch succeeded
+
+    Results are cached (VMDR TTL) only when every batch succeeded, so a
+    transient error is never served back as "no hosts affected".
+    """
+    qids = sorted({n for n in (safe_int(str(q)) for q in (qids or [])) if n > 0})
+    empty = {'hosts': [], 'hostCount': 0, 'detectionCount': 0,
+             'qidsChecked': len(qids), 'failedBatches': 0, 'ok': True}
+    if not qids:
+        return empty
+
+    cache_key = f"hosts_for_qids_{statuses}_{','.join(map(str, qids))}"
+    if use_cache:
+        cached_time = DETECTION_CACHE_TIME.get(cache_key)
+        if (cache_key in DETECTION_CACHE and cached_time
+                and (datetime.now(timezone.utc) - cached_time).total_seconds() < VMDR_CACHE_TTL):
+            return DETECTION_CACHE[cache_key]
+
+    by_host = {}
+    qid_max_qds = {}
+    detection_count = 0
+    failed_batches = 0
+    max_page_cap = MAX_PAGES if MAX_PAGES > 0 else 0
+    for i in range(0, len(qids), _HOSTS_FOR_QIDS_BATCH):
+        batch = qids[i:i + _HOSTS_FOR_QIDS_BATCH]
+        base_url = (
+            f"{BASE_URL}/api/2.0/fo/asset/host/vm/detection/?action=list"
+            f"&qids={','.join(map(str, batch))}&status={statuses}"
+            f"&show_qds=1&show_results=0"
+        )
+        id_min = 0
+        pages = 0
+        while True:
+            if max_page_cap > 0 and pages >= max_page_cap:
+                _log(f"Hosts-for-QIDs: hit MAX_PAGES cap ({max_page_cap})")
+                break
+            url = base_url + (f"&id_min={id_min}" if id_min > 0 else "")
+            data = api_get(url, timeout=120)
+            if not data or data == 'KB_BUSY':
+                failed_batches += 1
+                _log(f"Hosts-for-QIDs: detection API call failed for {len(batch)} QIDs")
+                break
+            dets, is_truncated, max_host_id = _parse_detections_xml(data)
+            pages += 1
+            for d in dets:
+                detection_count += 1
+                hid = d.get('host_id', '')
+                h = by_host.get(hid)
+                if h is None:
+                    h = by_host[hid] = {
+                        'hostId': hid, 'ip': d.get('ip', ''),
+                        'hostname': d.get('hostname', ''), 'os': d.get('os', ''),
+                        'qids': [], 'maxSeverity': 0, 'maxQds': 0,
+                    }
+                if d['qid'] not in h['qids']:
+                    h['qids'].append(d['qid'])
+                h['maxSeverity'] = max(h['maxSeverity'], d.get('severity', 0))
+                h['maxQds'] = max(h['maxQds'], d.get('qds', 0))
+                qid_max_qds[d['qid']] = max(qid_max_qds.get(d['qid'], 0), d.get('qds', 0))
+            if not is_truncated or max_host_id == 0:
+                break
+            id_min = max_host_id + 1
+
+    hosts = sorted(by_host.values(), key=lambda h: (h['maxQds'], h['maxSeverity']), reverse=True)
+    result = {
+        'hosts': hosts,
+        'hostCount': len(hosts),
+        'detectionCount': detection_count,
+        'qidsChecked': len(qids),
+        'qidMaxQds': qid_max_qds,
+        'failedBatches': failed_batches,
+        'ok': failed_batches == 0,
+    }
+    if result['ok']:
+        DETECTION_CACHE[cache_key] = result
+        DETECTION_CACHE_TIME[cache_key] = datetime.now(timezone.utc)
+    return result
 
 
 def get_qds_for_qids(qids):

@@ -884,7 +884,9 @@ def investigate_cve_agg(cve: str, detail: str = "standard") -> dict:
         elif 'linux' in title_lower or 'ubuntu' in title_lower or 'centos' in title_lower or 'rhel' in title_lower:
             os_filter = {'field': 'operatingSystem.name', 'operator': 'CONTAINS', 'value': 'Linux'}
 
-        if software_keywords:
+        csam_ok = module_available("csam")
+        result['summary']['csamAvailable'] = csam_ok
+        if software_keywords and csam_ok:
             software_searches = {}
             for kw in list(software_keywords)[:4]:
                 filters = [{'field': 'software.name', 'operator': 'CONTAINS', 'value': kw}]
@@ -941,39 +943,49 @@ def investigate_cve_agg(cve: str, detail: str = "standard") -> dict:
                 result['summary']['assetsWithSoftware'] = best_count
 
     if qids:
-        primary_qid = qids[0]
+        # Confirmed exposure: VMDR host detections across ALL mapped QIDs
+        # (previously only qids[0] was checked and errors were swallowed).
+        # Works without CSAM.
         try:
-            import xml.etree.ElementTree as _ET
-            det_url = f"{BASE_URL}/api/2.0/fo/asset/host/vm/detection/?action=list&qids={primary_qid}&status=New,Active,Re-Opened&truncation_limit=20&show_results=0"
-            det_data = api_get(det_url, timeout=45)
-            if det_data:
-                det_root = _ET.fromstring(det_data)
-                det_hosts = det_root.findall('.//HOST')
-                affected_list = []
-                for dh in det_hosts[:10]:
-                    affected_list.append({
-                        'hostId': dh.findtext('ID', ''),
-                        'ip': dh.findtext('IP', ''),
-                        'hostname': dh.findtext('DNS', '') or dh.findtext('DNS_DATA/HOSTNAME', '') or '',
-                        'os': dh.findtext('OS', ''),
-                    })
-                if affected_list:
-                    result['affectedAssets'] = affected_list
-                    result['detectionCount'] = len(det_hosts)
-                    result['summary']['confirmedAffected'] = len(det_hosts)
-                    result['confirmedHosts'] = {
-                        'searchedBy': f'QID {primary_qid} detections',
-                        'hostCount': len(det_hosts),
-                        'hosts': [{
-                            'hostId': a['hostId'],
-                            'ip': a['ip'],
-                            'hostname': a['hostname'],
-                            'os': a['os'],
-                        } for a in affected_list[:10]],
-                        'note': f'{len(det_hosts)} hosts have confirmed detections for QID {primary_qid} ({cve}).',
-                    }
-        except Exception:
-            pass
+            det = get_hosts_for_qids(qids)
+        except Exception as e:
+            _log(f"investigate_cve: VMDR host lookup failed: {e}")
+            det = {'hosts': [], 'hostCount': 0, 'detectionCount': 0,
+                   'qidsChecked': len(qids), 'failedBatches': 1, 'ok': False}
+        host_count = det.get('hostCount', 0)
+        hosts = det.get('hosts', [])
+        result['detectionCount'] = det.get('detectionCount', 0)
+
+        # Real QDS lives on detections. When the dedicated QDS fetch failed
+        # (e.g. 409 concurrency limit) the KB fallback is often 0 — use the
+        # detection QDS gathered above instead.
+        qid_qds = {safe_int(str(q)): v for q, v in (det.get('qidMaxQds') or {}).items()}
+        if qid_qds:
+            det_max = max(qid_qds.values())
+            if det_max > (result.get('qds') or 0):
+                result['qds'] = det_max
+                result['qdsSource'] = 'vmdr_detections'
+            for entry in result['allKbDetails']:
+                q_qds = qid_qds.get(safe_int(str(entry.get('qid'))), 0)
+                if q_qds > (entry.get('qds') or 0):
+                    entry['qds'] = q_qds
+        result['summary']['confirmedAffected'] = host_count
+        result['summary']['vmdrLookupOk'] = det.get('ok', False)
+        if host_count:
+            result['affectedAssets'] = hosts[:50]
+        if det.get('ok'):
+            note = (f'{host_count} hosts have open detections (New/Active/Re-Opened) for '
+                    f'{cve} across {det.get("qidsChecked", 0)} QIDs.')
+        else:
+            note = (f'VMDR detection lookup failed for {det.get("failedBatches", 0)} batch(es); '
+                    f'{host_count} hosts found so far — results may be incomplete.')
+        result['confirmedHosts'] = {
+            'searchedBy': f'VMDR detections for {det.get("qidsChecked", 0)} QIDs',
+            'hostCount': host_count,
+            'lookupOk': det.get('ok', False),
+            'hosts': hosts[:50],
+            'note': note,
+        }
 
     followups = []
     asset_count = result.get('summary', {}).get('confirmedAffected', 0) or result.get('summary', {}).get('assetsWithSoftware', 0)
@@ -6475,6 +6487,30 @@ def assess_exposure(cve: str = "", qid: int = 0, software: str = "", detail: str
     ):
         sw_keywords.insert(0, first_word)
 
+    # Software-based "potential exposure" needs CSAM. Without it, csam_count()
+    # silently returns 0, which used to be reported as "not exposed".
+    if not module_available("csam"):
+        result['exposure']['status'] = 'unknown'
+        result['exposure']['csamAvailable'] = False
+        result['exposure']['riskContext'] = {
+            'risk': 'unknown',
+            'severity': best_kb.get('severity', 0) if best_kb else 0,
+            'qds': best_kb.get('qds', 0) if best_kb else 0,
+            'hasExploit': best_kb.get('has_exploit', False) if best_kb else False,
+            'ransomware': best_kb.get('ransomware', False) if best_kb else False,
+        }
+        target_name = cve or (f'QID {qid}' if qid else software)
+        result['summary'] = (
+            f'{target_name}: software-based exposure not assessed — CyberSecurity Asset '
+            f'Management (CSAM) is not available on this subscription. Confirmed affected '
+            f'hosts come from VMDR detections instead.'
+        )
+        result['exposure']['recommendation'] = (
+            'Use VMDR detections (investigate on the CVE) for confirmed affected hosts.'
+        )
+        return _apply_detail_level(_with_meta(result), detail)
+
+    result['exposure']['csamAvailable'] = True
     sw_tasks = {'__total__': lambda: csam_count()}
     for kw in sw_keywords[:5]:
         sw_tasks[kw] = lambda k=kw: csam_count(
