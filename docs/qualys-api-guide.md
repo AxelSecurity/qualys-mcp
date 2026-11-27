@@ -209,7 +209,7 @@ VMDR uses the classic XML API at `BASE_URL` with Basic Auth.
 | Property | Value |
 |----------|-------|
 | Function | `get_detections(severity=5, limit=0, use_cache=True, days=30, qds_min=0, fetch_all=True)` |
-| URL | `GET {BASE_URL}/api/2.0/fo/asset/host/vm/detection/?action=list` |
+| URL | `GET {BASE_URL}/api/4.0/fo/asset/host/vm/detection/?action=list` |
 | Auth | Basic Auth |
 | Response | XML |
 | Timeout | 180 seconds |
@@ -253,7 +253,7 @@ VMDR uses the classic XML API at `BASE_URL` with Basic Auth.
 | Property | Value |
 |----------|-------|
 | Function | `get_host_detections(host_id, severity=4, days=30)` |
-| URL | `GET {BASE_URL}/api/2.0/fo/asset/host/vm/detection/?action=list&ids={host_id}&severities={severity}&show_qds=1&filter_superseded_qids=1&vm_processed_after={date}` |
+| URL | `GET {BASE_URL}/api/4.0/fo/asset/host/vm/detection/?action=list&ids={host_id}&severities={severity}&show_qds=1&filter_superseded_qids=1&vm_processed_after={date}` |
 | Auth | Basic Auth |
 | Response | XML |
 | Timeout | 120 seconds |
@@ -264,7 +264,7 @@ VMDR uses the classic XML API at `BASE_URL` with Basic Auth.
 | Property | Value |
 |----------|-------|
 | Function | `get_qds_for_qids(qids)` |
-| URL | `GET {BASE_URL}/api/2.0/fo/asset/host/vm/detection/?action=list&qids={qid_csv}&show_qds=1&status=Active&filter_superseded_qids=1` |
+| URL | `GET {BASE_URL}/api/4.0/fo/asset/host/vm/detection/?action=list&qids={qid_csv}&show_qds=1&status=Active&filter_superseded_qids=1` |
 | Auth | Basic Auth |
 | Response | XML |
 | Timeout | 60 seconds |
@@ -824,7 +824,7 @@ The VMDR detection API signals truncation via WARNING CODE 1980 in the XML respo
 3. Continue until no truncation warning or `max_host_id == 0`
 
 ```
-Page 1: /api/2.0/fo/asset/host/vm/detection/?action=list&severities=5...
+Page 1: /api/4.0/fo/asset/host/vm/detection/?action=list&severities=5...
 Page 2: ...&id_min=10001
 Page 3: ...&id_min=20001
 ```

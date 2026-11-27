@@ -804,6 +804,13 @@ def etm_download(report_id, resource_name, timeout=60):
 # ---------------------------------------------------------------------------
 
 
+# VMDR host detection API. v2.0 reached End-of-Service (Qualys returns an
+# "API EOS Warning" and schedules EOL); v4.0 returns the same XML schema
+# (HOST_LIST_VM_DETECTION_OUTPUT, same HOST/DETECTION fields and CODE 1980
+# truncation warning), so only the path changes.
+DETECTION_API_PATH = "/api/4.0/fo/asset/host/vm/detection/"
+
+
 def _parse_detections_xml(data):
     """Parse VMDR detection XML into a list of dicts. Returns (dets, is_truncated, max_host_id).
     Detects WARNING CODE 1980 (truncation) for id_min pagination."""
@@ -858,7 +865,7 @@ def get_detections(severity=5, limit=0, use_cache=True, days=30, qds_min=0, fetc
     def _fetch():
         after_date = (datetime.now(timezone.utc) - timedelta(days=days)).strftime('%Y-%m-%d')
         base_url = (
-            f"{BASE_URL}/api/2.0/fo/asset/host/vm/detection/?action=list"
+            f"{BASE_URL}{DETECTION_API_PATH}?action=list"
             f"&severities={severity}&status=Active"
             f"&show_qds=1&filter_superseded_qids=1"
             f"&vm_processed_after={after_date}"
@@ -907,7 +914,7 @@ def get_detections_by_qds(qds_min=70, days=30, limit=0, use_cache=True):
     def _fetch():
         after_date = (datetime.now(timezone.utc) - timedelta(days=days)).strftime('%Y-%m-%d')
         url = (
-            f"{BASE_URL}/api/2.0/fo/asset/host/vm/detection/?action=list"
+            f"{BASE_URL}{DETECTION_API_PATH}?action=list"
             f"&status=Active&show_qds=1&filter_superseded_qids=1"
             f"&qds_min={qds_min}"
             f"&vm_processed_after={after_date}"
@@ -958,7 +965,7 @@ def get_host_detections(host_id, severity=4, days=30):
     def _fetch():
         after_date = (datetime.now(timezone.utc) - timedelta(days=days)).strftime('%Y-%m-%d')
         data = api_get(
-            f"{BASE_URL}/api/2.0/fo/asset/host/vm/detection/?action=list"
+            f"{BASE_URL}{DETECTION_API_PATH}?action=list"
             f"&ids={host_id}&severities={severity}&show_qds=1&filter_superseded_qids=1"
             f"&vm_processed_after={after_date}",
             timeout=120
@@ -1035,7 +1042,7 @@ def get_hosts_for_qids(qids, statuses="New,Active,Re-Opened", use_cache=True):
     for i in range(0, len(qids), _HOSTS_FOR_QIDS_BATCH):
         batch = qids[i:i + _HOSTS_FOR_QIDS_BATCH]
         base_url = (
-            f"{BASE_URL}/api/2.0/fo/asset/host/vm/detection/?action=list"
+            f"{BASE_URL}{DETECTION_API_PATH}?action=list"
             f"&qids={','.join(map(str, batch))}&status={statuses}"
             f"&show_qds=1&show_results=0"
         )
@@ -1109,7 +1116,7 @@ def get_qds_for_qids(qids):
         qid_str = ','.join(map(str, batch))
         try:
             data = api_get(
-                f"{BASE_URL}/api/2.0/fo/asset/host/vm/detection/?action=list"
+                f"{BASE_URL}{DETECTION_API_PATH}?action=list"
                 f"&qids={qid_str}&show_qds=1&status=Active"
                 f"&filter_superseded_qids=1",
                 timeout=60

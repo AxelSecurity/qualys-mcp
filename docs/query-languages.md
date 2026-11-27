@@ -311,7 +311,7 @@ The VMDR detection API uses **URL query string parameters**. This is the oldest 
 
 ### Endpoint
 ```
-GET /api/2.0/fo/asset/host/vm/detection/?action=list&{params}
+GET /api/4.0/fo/asset/host/vm/detection/?action=list&{params}
 ```
 
 ### Key Parameters
@@ -336,16 +336,16 @@ GET /api/2.0/fo/asset/host/vm/detection/?action=list&{params}
 
 ```python
 # Active high/critical vulns, last 30 days
-f"{BASE_URL}/api/2.0/fo/asset/host/vm/detection/?action=list"
+f"{BASE_URL}/api/4.0/fo/asset/host/vm/detection/?action=list"
 f"&severities=4,5&status=Active&show_qds=1&filter_superseded_qids=1"
 f"&vm_processed_after=2024-01-01&truncation_limit=200"
 
 # Specific CVE via QID list
-f"{BASE_URL}/api/2.0/fo/asset/host/vm/detection/?action=list"
+f"{BASE_URL}/api/4.0/fo/asset/host/vm/detection/?action=list"
 f"&qids=376267,105233&status=Active&show_qds=1"
 
 # QDS-only high priority (QDS >= 80)
-f"{BASE_URL}/api/2.0/fo/asset/host/vm/detection/?action=list"
+f"{BASE_URL}/api/4.0/fo/asset/host/vm/detection/?action=list"
 f"&qds_min=80&status=Active&filter_superseded_qids=1"
 ```
 

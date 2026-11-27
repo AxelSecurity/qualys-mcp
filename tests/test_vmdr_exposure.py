@@ -203,3 +203,32 @@ class TestCveNotInKb:
         s = inv._summarize(data)
         assert "severity 5, QDS 95" in s["headline"]
         assert inv._build_actions(data, [])[0]["action"] == "Apply available patch for CVE-2026-1"
+
+
+class TestDetectionApiVersion:
+    def test_constant_is_v4(self):
+        assert api.DETECTION_API_PATH == "/api/4.0/fo/asset/host/vm/detection/"
+
+    def test_no_v2_detection_path_left(self):
+        import pathlib
+        src = pathlib.Path(api.__file__).read_text()
+        assert "/api/2.0/fo/asset/host/vm/detection/" not in src
+
+    def test_all_detection_callers_hit_v4(self, monkeypatch):
+        urls = []
+
+        def fake_get(url, timeout=30, **kw):
+            urls.append(url)
+            return _xml([])
+
+        monkeypatch.setattr(api, "api_get", fake_get)
+        api.get_hosts_for_qids([1], use_cache=False)
+        api.get_detections(severity=5, use_cache=False)
+        api.get_detections_by_qds(qds_min=70, use_cache=False)
+        api.QDS_CACHE.clear()
+        api.get_qds_for_qids([777001])
+        api.get_host_detections("999001", severity=4, days=1)
+        assert len(urls) == 5
+        assert all("/api/4.0/fo/asset/host/vm/detection/?action=list" in u for u in urls)
+        # concurrency semaphore still recognises the v4 path
+        assert "/fo/asset/host/vm/detection/" in urls[0]

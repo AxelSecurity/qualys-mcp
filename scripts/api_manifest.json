@@ -53,7 +53,7 @@
       "endpoints": [
         {
           "method": "GET",
-          "path": "/api/2.0/fo/asset/host/vm/detection/",
+          "path": "/api/4.0/fo/asset/host/vm/detection/",
           "status": "implemented",
           "description": "Host vulnerability detections"
         },
